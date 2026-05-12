@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useI18n } from '../../contexts/I18nContext';
 import { authService, type LoginProvider, type LoginConfig } from '../../services/authService';
 import LanguageSwitcher from '../../components/LanguageSwitcher';
+import type { User } from '../../types/auth';
 
 interface LoginCredentials {
   username: string;
@@ -96,11 +97,20 @@ const LoginPage: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      await authService.loginWithProvider(selectedProvider, credentials);
-      const user = await authService.getCurrentUser();
-      setUser(user);
-      setAuthenticated(true);
-      navigate('/dashboard');
+      const response = await authService.loginWithProvider(selectedProvider, credentials as unknown as Record<string, unknown>);
+      
+      // Use the user from the login response directly
+      if (response.data?.user) {
+        setUser(response.data.user as User);
+        setAuthenticated(true);
+        navigate('/dashboard');
+      } else {
+        // Fallback to fetching user separately
+        const user = await authService.getCurrentUser();
+        setUser(user);
+        setAuthenticated(true);
+        navigate('/dashboard');
+      }
     } catch (err: any) {
       setError(getTranslatedErrorMessage(err));
     } finally {

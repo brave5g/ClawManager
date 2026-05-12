@@ -106,7 +106,7 @@ func main() {
 	openClawConfigService := services.NewOpenClawConfigService(openClawConfigRepo)
 	objectStorageService, err := services.NewObjectStorageService(cfg.ObjectStorage)
 	if err != nil {
-		log.Fatalf("Failed to initialize object storage: %w", err)
+		log.Fatalf("Failed to initialize object storage: %v", err)
 	}
 	skillScannerClient := services.NewSkillScannerClient(cfg.SkillScanner)
 	aiObservabilityService := services.NewAIObservabilityService(modelInvocationRepo, auditEventRepo, costRecordRepo, riskHitRepo, chatMessageRepo, llmModelRepo, instanceRepo, userRepo)

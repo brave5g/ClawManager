@@ -4,7 +4,8 @@ import type {
   RegisterRequest, 
   RefreshTokenRequest,
   AuthResponse,
-  User 
+  User,
+  TokenPair 
 } from '../types/auth';
 
 export interface ChangePasswordRequest {
@@ -43,7 +44,7 @@ export const authService = {
     
     const response = await api.post(endpoint, data);
     if (response.data.data) {
-      const { access_token, refresh_token } = response.data.data as { access_token: string; refresh_token: string; expires_in: number };
+      const { access_token, refresh_token, user } = response.data.data as TokenPair;
       localStorage.setItem('access_token', access_token);
       localStorage.setItem('refresh_token', refresh_token);
     }
@@ -51,11 +52,11 @@ export const authService = {
   },
 
   ldapLogin: async (data: LoginRequest): Promise<AuthResponse> => {
-    return authService.loginWithProvider('ldap', data);
+    return authService.loginWithProvider('ldap', data as unknown as Record<string, unknown>);
   },
 
   login: async (data: LoginRequest): Promise<AuthResponse> => {
-    return authService.loginWithProvider('local', data);
+    return authService.loginWithProvider('local', data as unknown as Record<string, unknown>);
   },
 
   register: async (data: RegisterRequest): Promise<AuthResponse> => {
@@ -72,7 +73,7 @@ export const authService = {
   refreshToken: async (data: RefreshTokenRequest): Promise<AuthResponse> => {
     const response = await api.post('/auth/refresh', data);
     if (response.data.data) {
-      const { access_token, refresh_token } = response.data.data as { access_token: string; refresh_token: string; expires_in: number };
+      const { access_token, refresh_token } = response.data.data as unknown as { access_token: string; refresh_token: string };
       localStorage.setItem('access_token', access_token);
       localStorage.setItem('refresh_token', refresh_token);
     }
