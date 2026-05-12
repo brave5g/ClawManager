@@ -46,6 +46,12 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
     
+    // Skip login and register requests - they don't need token refresh
+    const url = originalRequest?.url || '';
+    if (url.includes('/auth/login') || url.includes('/auth/register') || url.includes('/auth/config')) {
+      return Promise.reject(error);
+    }
+    
     // If error is not 401 or request is already retried, reject
     if (error.response?.status !== 401 || !originalRequest || originalRequest._retry) {
       return Promise.reject(error);

@@ -4,6 +4,8 @@ export interface User {
   email: string;
   role: 'admin' | 'user';
   is_active: boolean;
+  source: 'local' | 'ldap';
+  approval_status: 'pending' | 'approved' | 'rejected';
   created_at: string;
   updated_at: string;
   last_login?: string;

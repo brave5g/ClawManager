@@ -1,7 +1,9 @@
 package config
 
 import (
+	"clawreef/internal/utils"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -16,6 +18,7 @@ type Config struct {
 	Kubernetes    KubernetesConfig    `yaml:"kubernetes"`
 	ObjectStorage ObjectStorageConfig `yaml:"objectStorage"`
 	SkillScanner  SkillScannerConfig  `yaml:"skillScanner"`
+	LDAP          LDAPConfig          `yaml:"ldap"`
 }
 
 // ServerConfig holds server-related configuration
@@ -135,10 +138,33 @@ type ObjectStorageConfig struct {
 }
 
 type SkillScannerConfig struct {
-	BaseURL   string `yaml:"baseUrl"`
-	APIKey    string `yaml:"apiKey"`
-	TimeoutSeconds int `yaml:"timeoutSeconds"`
-	Enabled   bool   `yaml:"enabled"`
+	BaseURL        string `yaml:"baseUrl"`
+	APIKey         string `yaml:"apiKey"`
+	TimeoutSeconds int    `yaml:"timeoutSeconds"`
+	Enabled        bool   `yaml:"enabled"`
+}
+
+// LDAPConfig holds LDAP authentication configuration
+type LDAPConfig struct {
+	Enabled                   bool   `yaml:"enabled"`
+	Host                      string `yaml:"host"`
+	Port                      int    `yaml:"port"`
+	UseSSL                    bool   `yaml:"useSSL"`
+	InsecureSkipVerify        bool   `yaml:"insecureSkipVerify"`
+	BaseDN                    string `yaml:"baseDN"`
+	BindDN                    string `yaml:"bindDN"`
+	BindPassword              string `yaml:"bindPassword"`
+	UserSearchFilter          string `yaml:"userSearchFilter"`
+	UserSearchBaseDN          string `yaml:"userSearchBaseDN"`
+	UsernameAttribute         string `yaml:"usernameAttribute"`
+	EmailAttribute            string `yaml:"emailAttribute"`
+	NameAttribute             string `yaml:"nameAttribute"`
+	LDAPFilter                string `yaml:"ldapFilter"`
+	AllowUsernameOrEmailLogin bool   `yaml:"allowUsernameOrEmailLogin"`
+	AutoCreateUser            bool   `yaml:"autoCreateUser"`
+	GroupBaseDN               string `yaml:"groupBaseDN"`
+	AdminGroup                string `yaml:"adminGroup"`
+	AdminGroupAttribute       string `yaml:"adminGroupAttribute"`
 }
 
 // Load loads configuration from file and environment variables
@@ -211,10 +237,30 @@ func Load() (*Config, error) {
 			LocalFallback:  getEnv("OBJECT_STORAGE_LOCAL_FALLBACK", ".data/object-storage"),
 		},
 		SkillScanner: SkillScannerConfig{
-			BaseURL: getEnv("SKILL_SCANNER_BASE_URL", ""),
-			APIKey: getEnv("SKILL_SCANNER_API_KEY", ""),
+			BaseURL:        getEnv("SKILL_SCANNER_BASE_URL", ""),
+			APIKey:         getEnv("SKILL_SCANNER_API_KEY", ""),
 			TimeoutSeconds: 30,
-			Enabled: strings.EqualFold(getEnv("SKILL_SCANNER_ENABLED", "false"), "true"),
+			Enabled:        strings.EqualFold(getEnv("SKILL_SCANNER_ENABLED", "false"), "true"),
+		},
+		LDAP: LDAPConfig{
+			Enabled:                   strings.EqualFold(getEnv("LDAP_ENABLED", "false"), "true"),
+			Host:                      getEnv("LDAP_HOST", ""),
+			Port:                      389,
+			UseSSL:                    strings.EqualFold(getEnv("LDAP_USE_SSL", "false"), "true"),
+			InsecureSkipVerify:        strings.EqualFold(getEnv("LDAP_INSECURE_SKIP_VERIFY", "false"), "true"),
+			BaseDN:                    getEnv("LDAP_BASE_DN", ""),
+			BindDN:                    getEnv("LDAP_BIND_DN", ""),
+			BindPassword:              getEnv("LDAP_BIND_PASSWORD", ""),
+			UserSearchFilter:          getEnv("LDAP_USER_SEARCH_FILTER", "(uid=%{username})"),
+			UserSearchBaseDN:          getEnv("LDAP_USER_SEARCH_BASE_DN", ""),
+			UsernameAttribute:         getEnv("LDAP_USERNAME_ATTRIBUTE", "uid"),
+			EmailAttribute:            getEnv("LDAP_EMAIL_ATTRIBUTE", "mail"),
+			NameAttribute:             getEnv("LDAP_NAME_ATTRIBUTE", "cn"),
+			LDAPFilter:                getEnv("LDAP_FILTER", ""),
+			AllowUsernameOrEmailLogin: strings.EqualFold(getEnv("LDAP_ALLOW_USERNAME_OR_EMAIL_LOGIN", "true"), "true"),
+			AutoCreateUser:            strings.EqualFold(getEnv("LDAP_AUTO_CREATE_USER", "true"), "true"),
+			GroupBaseDN:               getEnv("LDAP_GROUP_BASE_DN", ""),
+			AdminGroup:                getEnv("LDAP_ADMIN_GROUP", ""),
 		},
 	}
 
@@ -346,6 +392,75 @@ func applyEnvOverrides(config *Config) {
 	}
 	if timeoutSeconds := os.Getenv("SKILL_SCANNER_TIMEOUT_SECONDS"); timeoutSeconds != "" {
 		fmt.Sscanf(timeoutSeconds, "%d", &config.SkillScanner.TimeoutSeconds)
+	}
+
+	// LDAP config
+	if enabled := os.Getenv("LDAP_ENABLED"); enabled != "" {
+		config.LDAP.Enabled = strings.EqualFold(enabled, "true")
+	}
+	if host := os.Getenv("LDAP_HOST"); host != "" {
+		config.LDAP.Host = host
+	}
+	if port := os.Getenv("LDAP_PORT"); port != "" {
+		fmt.Sscanf(port, "%d", &config.LDAP.Port)
+	}
+	if useSSL := os.Getenv("LDAP_USE_SSL"); useSSL != "" {
+		config.LDAP.UseSSL = strings.EqualFold(useSSL, "true")
+	}
+	if insecureSkipVerify := os.Getenv("LDAP_INSECURE_SKIP_VERIFY"); insecureSkipVerify != "" {
+		config.LDAP.InsecureSkipVerify = strings.EqualFold(insecureSkipVerify, "true")
+	}
+	if baseDN := os.Getenv("LDAP_BASE_DN"); baseDN != "" {
+		config.LDAP.BaseDN = baseDN
+	}
+	if bindDN := os.Getenv("LDAP_BIND_DN"); bindDN != "" {
+		config.LDAP.BindDN = bindDN
+	}
+	if bindPassword := os.Getenv("LDAP_BIND_PASSWORD"); bindPassword != "" {
+		config.LDAP.BindPassword = bindPassword
+	}
+	if userSearchFilter := os.Getenv("LDAP_USER_SEARCH_FILTER"); userSearchFilter != "" {
+		config.LDAP.UserSearchFilter = userSearchFilter
+	}
+	if userSearchBaseDN := os.Getenv("LDAP_USER_SEARCH_BASE_DN"); userSearchBaseDN != "" {
+		config.LDAP.UserSearchBaseDN = userSearchBaseDN
+	}
+	if usernameAttribute := os.Getenv("LDAP_USERNAME_ATTRIBUTE"); usernameAttribute != "" {
+		config.LDAP.UsernameAttribute = usernameAttribute
+	}
+	if emailAttribute := os.Getenv("LDAP_EMAIL_ATTRIBUTE"); emailAttribute != "" {
+		config.LDAP.EmailAttribute = emailAttribute
+	}
+	if nameAttribute := os.Getenv("LDAP_NAME_ATTRIBUTE"); nameAttribute != "" {
+		config.LDAP.NameAttribute = nameAttribute
+	}
+	if ldapFilter := os.Getenv("LDAP_FILTER"); ldapFilter != "" {
+		config.LDAP.LDAPFilter = ldapFilter
+	}
+	if allowUsernameOrEmailLogin := os.Getenv("LDAP_ALLOW_USERNAME_OR_EMAIL_LOGIN"); allowUsernameOrEmailLogin != "" {
+		config.LDAP.AllowUsernameOrEmailLogin = strings.EqualFold(allowUsernameOrEmailLogin, "true")
+	}
+	if autoCreateUser := os.Getenv("LDAP_AUTO_CREATE_USER"); autoCreateUser != "" {
+		config.LDAP.AutoCreateUser = strings.EqualFold(autoCreateUser, "true")
+	}
+	if groupBaseDN := os.Getenv("LDAP_GROUP_BASE_DN"); groupBaseDN != "" {
+		config.LDAP.GroupBaseDN = groupBaseDN
+	}
+	if adminGroup := os.Getenv("LDAP_ADMIN_GROUP"); adminGroup != "" {
+		config.LDAP.AdminGroup = adminGroup
+	}
+}
+
+func DecryptLDAPBindPassword(config *Config) {
+	if config.LDAP.BindPassword != "" && strings.HasPrefix(config.LDAP.BindPassword, "enc:") {
+		encryptedPassword := strings.TrimPrefix(config.LDAP.BindPassword, "enc:")
+		decrypted, err := utils.DecryptPassword(encryptedPassword)
+		if err != nil {
+			log.Printf("Warning: Failed to decrypt LDAP bind password: %v", err)
+			config.LDAP.BindPassword = encryptedPassword
+			return
+		}
+		config.LDAP.BindPassword = decrypted
 	}
 }
 

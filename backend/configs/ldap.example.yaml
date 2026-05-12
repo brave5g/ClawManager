@@ -1,0 +1,55 @@
+# LDAP Configuration Example
+# This file demonstrates how to configure LDAP authentication for ClawManager
+# Copy this file to ldap.yaml and modify according to your LDAP server settings
+
+server:
+  address: ":9001"
+  mode: "debug"
+
+database:
+  host: "localhost"
+  port: 3306
+  user: "clawreef"
+  password: "clawreef123"
+  database: "clawreef"
+
+jwt:
+  secret: "your-secret-key-here-change-in-production"
+  access_expiry: 60
+  refresh_expiry: 168
+
+ldap:
+  # Enable LDAP authentication
+  enabled: true
+  
+  # LDAP server settings
+  host: "ldap.your-company.com"
+  port: 389
+  useSSL: false
+  
+  # Base DN for LDAP operations
+  baseDN: "dc=your-company,dc=com"
+  
+  # Service account for searching users (optional but recommended)
+  bindDN: "cn=admin,dc=your-company,dc=com"
+  bindPassword: "your-bind-password"
+  
+  # User search settings
+  userSearchFilter: "(uid=%{username})"
+  userSearchBaseDN: "ou=users,dc=your-company,dc=com"
+  
+  # Attribute mappings
+  usernameAttribute: "uid"
+  emailAttribute: "mail"
+  nameAttribute: "cn"
+  
+  # Additional filter (optional)
+  # ldapFilter: "(memberOf=cn=clawreef-users,ou=groups,dc=your-company,dc=com)"
+  
+  # Login options
+  allowUsernameOrEmailLogin: true
+  autoCreateUser: true
+  
+  # Group settings for admin role (optional)
+  groupBaseDN: "ou=groups,dc=your-company,dc=com"
+  adminGroup: "clawreef-admins"

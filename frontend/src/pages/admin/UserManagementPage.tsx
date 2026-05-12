@@ -8,8 +8,13 @@ import type { User, UserQuota } from '../../types/user';
 const UserManagementPage: React.FC = () => {
   const { t } = useI18n();
   const [users, setUsers] = useState<User[]>([]);
+  const [pendingUsers, setPendingUsers] = useState<User[]>([]);
+  const [rejectedUsers, setRejectedUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [rejectedLoading, setRejectedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'rejected'>('all');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showQuotaModal, setShowQuotaModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState(false);
@@ -33,6 +38,18 @@ const UserManagementPage: React.FC = () => {
     void loadUsers();
   }, []);
 
+  useEffect(() => {
+    if (activeTab === 'pending') {
+      void loadPendingUsers();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'rejected') {
+      void loadRejectedUsers();
+    }
+  }, [activeTab]);
+
   const loadUsers = async () => {
     try {
       setLoading(true);
@@ -44,6 +61,63 @@ const UserManagementPage: React.FC = () => {
       setUsers([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPendingUsers = async () => {
+    try {
+      setPendingLoading(true);
+      setError(null);
+      const data = await userService.getPendingUsers();
+      setPendingUsers(data.users || []);
+    } catch (err: any) {
+      setError(err.response?.data?.error || t('userManagementPage.loadPendingFailed'));
+      setPendingUsers([]);
+    } finally {
+      setPendingLoading(false);
+    }
+  };
+
+  const loadRejectedUsers = async () => {
+    try {
+      setRejectedLoading(true);
+      setError(null);
+      const data = await userService.getRejectedUsers();
+      setRejectedUsers(data.users || []);
+    } catch (err: any) {
+      setError(err.response?.data?.error || t('userManagementPage.loadRejectedFailed'));
+      setRejectedUsers([]);
+    } finally {
+      setRejectedLoading(false);
+    }
+  };
+
+  const handleApproveUser = async (user: User) => {
+    try {
+      await userService.approveUser(user.id, 'approve');
+      setPendingUsers((current) => current.filter((u) => u.id !== user.id));
+      void loadUsers();
+    } catch (err: any) {
+      setError(err.response?.data?.error || t('userManagementPage.approveFailed'));
+    }
+  };
+
+  const handleRejectUser = async (user: User) => {
+    try {
+      await userService.approveUser(user.id, 'reject');
+      setPendingUsers((current) => current.filter((u) => u.id !== user.id));
+    } catch (err: any) {
+      setError(err.response?.data?.error || t('userManagementPage.rejectFailed'));
+    }
+  };
+
+  const handleReapproveUser = async (user: User) => {
+    try {
+      await userService.approveUser(user.id, 'approve');
+      setRejectedUsers((current) => current.filter((u) => u.id !== user.id));
+      void loadUsers();
+    } catch (err: any) {
+      setError(err.response?.data?.error || t('userManagementPage.approveFailed'));
     }
   };
 
@@ -205,6 +279,49 @@ const UserManagementPage: React.FC = () => {
         </button>
       </div>
 
+      <div className="mb-4 flex border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('all')}
+          className={`px-4 py-2 text-sm font-medium ${
+            activeTab === 'all'
+              ? 'border-b-2 border-indigo-500 text-indigo-600'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          {t('userManagementPage.allUsers')}
+        </button>
+        <button
+          onClick={() => setActiveTab('pending')}
+          className={`px-4 py-2 text-sm font-medium ${
+            activeTab === 'pending'
+              ? 'border-b-2 border-indigo-500 text-indigo-600'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          {t('userManagementPage.pendingUsers')}
+          {pendingUsers.length > 0 && (
+            <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600">
+              {pendingUsers.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('rejected')}
+          className={`px-4 py-2 text-sm font-medium ${
+            activeTab === 'rejected'
+              ? 'border-b-2 border-indigo-500 text-indigo-600'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          {t('userManagementPage.rejectedUsers')}
+          {rejectedUsers.length > 0 && (
+            <span className="ml-2 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-600">
+              {rejectedUsers.length}
+            </span>
+          )}
+        </button>
+      </div>
+
       <div className="space-y-4">
         {error && (
           <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
@@ -273,85 +390,288 @@ const UserManagementPage: React.FC = () => {
           </div>
         )}
 
-        <div className="app-panel">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('auth.username')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('auth.email')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('admin.role')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('common.status')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('common.createdAt')}
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('aiAuditPage.action')}
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{user.username}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-500">{user.email}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.role === 'admin'
-                        ? 'bg-purple-100 text-purple-800'
-                        : 'bg-green-100 text-green-800'
-                    }`}>
-                      {user.role === 'admin' ? t('common.admin') : t('common.user')}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.is_active
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}>
-                      {user.is_active ? t('modelManagementPage.active') : t('modelManagementPage.inactive')}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {new Date(user.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => handleEditQuota(user)}
-                      className="text-indigo-600 hover:text-indigo-900 mr-4"
-                    >
-                      {t('userManagementPage.quota')}
-                    </button>
-                    <button
-                      onClick={() => handleEditRole(user)}
-                      className="text-indigo-600 hover:text-indigo-900 mr-4"
-                    >
-                      {t('admin.role')}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteClick(user)}
-                      className="text-red-600 hover:text-red-900"
-                    >
-                      {t('common.delete')}
-                    </button>
-                  </td>
+        {activeTab === 'all' ? (
+          <div className="app-panel">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('auth.username')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('auth.email')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('admin.role')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('common.status')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('userManagementPage.source')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('common.createdAt')}
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {t('aiAuditPage.action')}
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {users.map((user) => (
+                  <tr key={user.id}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">{user.username}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-500">{user.email}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        user.role === 'admin'
+                          ? 'bg-purple-100 text-purple-800'
+                          : 'bg-green-100 text-green-800'
+                      }`}>
+                        {user.role === 'admin' ? t('common.admin') : t('common.user')}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        user.source === 'ldap'
+                          ? user.approval_status === 'approved'
+                            ? 'bg-green-100 text-green-800'
+                            : user.approval_status === 'pending'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-red-100 text-red-800'
+                          : user.is_active
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                      }`}>
+                        {user.source === 'ldap'
+                          ? user.approval_status === 'approved'
+                            ? t('userManagementPage.approved')
+                            : user.approval_status === 'pending'
+                              ? t('userManagementPage.pending')
+                              : t('userManagementPage.rejected')
+                          : user.is_active
+                            ? t('modelManagementPage.active')
+                            : t('modelManagementPage.inactive')
+                        }
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        user.source === 'ldap'
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {user.source === 'ldap' ? 'LDAP' : t('userManagementPage.local')}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(user.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      <button
+                        onClick={() => handleEditQuota(user)}
+                        className="text-indigo-600 hover:text-indigo-900 mr-4"
+                      >
+                        {t('userManagementPage.quota')}
+                      </button>
+                      <button
+                        onClick={() => handleEditRole(user)}
+                        className="text-indigo-600 hover:text-indigo-900 mr-4"
+                      >
+                        {t('admin.role')}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteClick(user)}
+                        className="text-red-600 hover:text-red-900"
+                      >
+                        {t('common.delete')}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : activeTab === 'pending' ? (
+          <div className="app-panel">
+            {pendingLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-gray-500">{t('userManagementPage.loading')}</div>
+              </div>
+            ) : pendingUsers.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-gray-500">{t('userManagementPage.noPendingUsers')}</div>
+              </div>
+            ) : (
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('auth.username')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('auth.email')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('admin.role')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('userManagementPage.source')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('common.createdAt')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('userManagementPage.initialPassword')}
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('aiAuditPage.action')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {pendingUsers.map((user) => (
+                    <tr key={user.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{user.username}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-500">{user.email}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          user.role === 'admin'
+                            ? 'bg-purple-100 text-purple-800'
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {user.role === 'admin' ? t('common.admin') : t('common.user')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          user.source === 'ldap'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {user.source === 'ldap' ? 'LDAP' : t('userManagementPage.local')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <code className="bg-gray-100 px-2 py-1 rounded">user123</code>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button
+                          onClick={() => handleApproveUser(user)}
+                          className="text-green-600 hover:text-green-900 mr-4"
+                        >
+                          {t('userManagementPage.approve')}
+                        </button>
+                        <button
+                          onClick={() => handleRejectUser(user)}
+                          className="text-red-600 hover:text-red-900"
+                        >
+                          {t('userManagementPage.reject')}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ) : (
+          <div className="app-panel">
+            {rejectedLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-gray-500">{t('userManagementPage.loading')}</div>
+              </div>
+            ) : rejectedUsers.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-gray-500">{t('userManagementPage.noRejectedUsers')}</div>
+              </div>
+            ) : (
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('auth.username')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('auth.email')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('admin.role')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('userManagementPage.source')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('common.createdAt')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('userManagementPage.initialPassword')}
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('aiAuditPage.action')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {rejectedUsers.map((user) => (
+                    <tr key={user.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{user.username}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-500">{user.email}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          user.role === 'admin'
+                            ? 'bg-purple-100 text-purple-800'
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {user.role === 'admin' ? t('common.admin') : t('common.user')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          user.source === 'ldap'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {user.source === 'ldap' ? 'LDAP' : t('userManagementPage.local')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <code className="bg-gray-100 px-2 py-1 rounded">user123</code>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button
+                          onClick={() => handleReapproveUser(user)}
+                          className="text-green-600 hover:text-green-900 mr-4"
+                        >
+                          {t('userManagementPage.reapprove')}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
 
       {showImportModal && (

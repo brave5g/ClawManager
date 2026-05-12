@@ -278,7 +278,6 @@ func (h *Hub) GetClientCount() int {
 	return len(h.clients)
 }
 
-
 // Stop gracefully shuts down the hub, closing all client connections.
 func (h *Hub) Stop() {
 	close(h.stop)

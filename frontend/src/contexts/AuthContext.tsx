@@ -4,12 +4,17 @@ import { useAuthStore } from '../stores/authStore';
 interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
+  isSubmitting: boolean;
   user: any;
   error: string | null;
   login: (username: string, password: string) => Promise<void>;
+  ldapLogin: (username: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  fetchCurrentUser: () => Promise<void>;
   clearError: () => void;
+  setUser: (user: any) => void;
+  setAuthenticated: (value: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -29,12 +34,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const value: AuthContextType = {
     isAuthenticated: store.isAuthenticated,
     isLoading: store.isLoading,
+    isSubmitting: store.isSubmitting,
     user: store.user,
     error: store.error,
     login: store.login,
+    ldapLogin: store.ldapLogin,
     register: store.register,
     logout: store.logout,
+    fetchCurrentUser: store.fetchCurrentUser,
     clearError: store.clearError,
+    setUser: store.setUser,
+    setAuthenticated: store.setAuthenticated,
   };
 
   return (

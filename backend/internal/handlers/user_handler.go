@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"clawreef/internal/models"
 	"clawreef/internal/services"
@@ -51,8 +52,8 @@ type UpdateQuotaRequest struct {
 	MaxInstances int     `json:"max_instances" binding:"min=0"`
 	MaxCPUCores  float64 `json:"max_cpu_cores" binding:"min=0"`
 	MaxMemoryGB  int     `json:"max_memory_gb" binding:"min=0"`
-	MaxStorageGB int `json:"max_storage_gb" binding:"min=0"`
-	MaxGPUCount  int `json:"max_gpu_count" binding:"min=0"`
+	MaxStorageGB int     `json:"max_storage_gb" binding:"min=0"`
+	MaxGPUCount  int     `json:"max_gpu_count" binding:"min=0"`
 }
 
 // CreateUserRequest represents a create user request (admin only)
@@ -70,15 +71,15 @@ type importUserResult struct {
 }
 
 type importedUserCredential struct {
-	Username        string `json:"username"`
-	Email           string `json:"email"`
-	Role            string `json:"role"`
+	Username        string  `json:"username"`
+	Email           string  `json:"email"`
+	Role            string  `json:"role"`
 	MaxInstances    int     `json:"max_instances"`
 	MaxCPUCores     float64 `json:"max_cpu_cores"`
 	MaxMemoryGB     int     `json:"max_memory_gb"`
-	MaxStorageGB    int    `json:"max_storage_gb"`
-	MaxGPUCount     int    `json:"max_gpu_count"`
-	InitialPassword string `json:"initial_password"`
+	MaxStorageGB    int     `json:"max_storage_gb"`
+	MaxGPUCount     int     `json:"max_gpu_count"`
+	InitialPassword string  `json:"initial_password"`
 }
 
 var importUsernamePattern = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
@@ -584,4 +585,142 @@ func (h *UserHandler) UpdateUserQuota(c *gin.Context) {
 	}
 
 	utils.Success(c, http.StatusOK, "Quota updated successfully", quota)
+}
+
+// ApprovalRequest represents a user approval request
+type ApprovalRequest struct {
+	Action string `json:"action" binding:"required,oneof=approve reject"`
+}
+
+// ListPendingUsers lists all pending or rejected users (admin only)
+func (h *UserHandler) ListPendingUsers(c *gin.Context) {
+	var req ListUsersRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+
+	// Calculate offset
+	offset := (req.Page - 1) * req.Limit
+
+	users, err := h.userService.ListUsersByPendingOrRejectedStatus(offset, req.Limit)
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	for i := range users {
+		users[i].StatusText = users[i].Status()
+	}
+
+	// Get total count
+	total, err := h.userService.CountUsersByPendingOrRejectedStatus()
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	response := map[string]interface{}{
+		"users": users,
+		"total": total,
+		"page":  req.Page,
+		"limit": req.Limit,
+	}
+
+	utils.Success(c, http.StatusOK, "Pending users retrieved successfully", response)
+}
+
+// ApproveUser approves or rejects a user (admin only)
+func (h *UserHandler) ApproveUser(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	var req ApprovalRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+
+	// Get the user
+	user, err := h.userService.GetUserByID(id)
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	if user == nil {
+		utils.Error(c, http.StatusNotFound, "User not found")
+		return
+	}
+
+	// Check if user is already approved and action is approve (no change needed)
+	if user.ApprovalStatus == models.UserStatusApproved && req.Action == "approve" {
+		utils.Error(c, http.StatusBadRequest, "User has already been approved")
+		return
+	}
+
+	// Update approval status
+	var newStatus string
+	if req.Action == "approve" {
+		newStatus = models.UserStatusApproved
+		user.IsActive = true
+	} else {
+		newStatus = models.UserStatusRejected
+		user.IsActive = false
+	}
+
+	user.ApprovalStatus = newStatus
+	user.UpdatedAt = time.Now()
+
+	if err := h.userService.UpdateUser(user); err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	message := "User has been approved successfully"
+	if req.Action == "reject" {
+		message = "User has been rejected"
+	}
+
+	utils.Success(c, http.StatusOK, message, user)
+}
+
+// ListRejectedUsers lists all rejected users (admin only)
+func (h *UserHandler) ListRejectedUsers(c *gin.Context) {
+	var req ListUsersRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+
+	offset := (req.Page - 1) * req.Limit
+
+	users, err := h.userService.ListRejectedUsers(offset, req.Limit)
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	for i := range users {
+		users[i].StatusText = users[i].Status()
+	}
+
+	total, err := h.userService.CountRejectedUsers()
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	response := map[string]interface{}{
+		"users": users,
+		"total": total,
+		"page":  req.Page,
+		"limit": req.Limit,
+	}
+
+	utils.Success(c, http.StatusOK, "Rejected users retrieved successfully", response)
 }

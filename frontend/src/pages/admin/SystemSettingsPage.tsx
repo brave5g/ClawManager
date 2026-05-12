@@ -5,6 +5,7 @@ import PasswordSettingsSection from '../../components/PasswordSettingsSection';
 import {
   systemSettingsService,
   type SystemImageSetting,
+  type LDAPConfig,
 } from '../../services/systemSettingsService';
 
 const IMAGE_TYPE_OPTIONS = [
@@ -30,6 +31,30 @@ const SystemSettingsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
+  const [ldapConfig, setLdapConfig] = useState<LDAPConfig>({
+    enabled: false,
+    host: '',
+    port: 389,
+    use_ssl: false,
+    base_dn: '',
+    bind_dn: '',
+    bind_password: '',
+    user_search_filter: '(uid=%{username})',
+    user_search_base_dn: '',
+    username_attribute: 'uid',
+    email_attribute: 'mail',
+    name_attribute: 'cn',
+    ldap_filter: '',
+    allow_username_or_email_login: true,
+    auto_create_user: true,
+    group_base_dn: '',
+    admin_group: '',
+  });
+  const [ldapLoading, setLdapLoading] = useState(true);
+  const [ldapSaving, setLdapSaving] = useState(false);
+  const [ldapError, setLdapError] = useState<string | null>(null);
+  const [ldapSaved, setLdapSaved] = useState(false);
+
   const usedTypes = useMemo(
     () => cards.map((card) => card.instance_type).filter(Boolean),
     [cards],
@@ -54,6 +79,22 @@ const SystemSettingsPage: React.FC = () => {
     };
 
     loadSettings();
+  }, []);
+
+  useEffect(() => {
+    const loadLDAPConfig = async () => {
+      try {
+        setLdapLoading(true);
+        const config = await systemSettingsService.getLDAPConfig();
+        setLdapConfig(config);
+      } catch (error: any) {
+        console.warn('Failed to load LDAP config:', error);
+      } finally {
+        setLdapLoading(false);
+      }
+    };
+
+    loadLDAPConfig();
   }, []);
 
   const addCard = () => {
@@ -153,10 +194,297 @@ const SystemSettingsPage: React.FC = () => {
     }
   };
 
+  const handleLDAPChange = (field: keyof LDAPConfig, value: boolean | string | number) => {
+    setLdapConfig((prev) => ({ ...prev, [field]: value }));
+    setLdapError(null);
+    setLdapSaved(false);
+  };
+
+  const saveLDAPConfig = async () => {
+    if (!ldapConfig.host && ldapConfig.enabled) {
+      setLdapError(t('systemSettingsPage.ldapHostRequired'));
+      return;
+    }
+
+    setLdapSaving(true);
+    setLdapError(null);
+
+    try {
+      if (ldapConfig.enabled) {
+        const testResult = await systemSettingsService.testLDAPConnection(ldapConfig);
+        if (!testResult.success) {
+          setLdapError(testResult.error || t('systemSettingsPage.ldapConnectionFailed'));
+          return;
+        }
+      }
+
+      await systemSettingsService.saveLDAPConfig(ldapConfig);
+      setLdapSaved(true);
+      setTimeout(() => setLdapSaved(false), 3000);
+    } catch (error: any) {
+      setLdapError(error.response?.data?.error || t('systemSettingsPage.ldapSaveFailed'));
+    } finally {
+      setLdapSaving(false);
+    }
+  };
+
   return (
     <AdminLayout title={t('admin.systemSettings')}>
       <div className="space-y-6">
         <PasswordSettingsSection />
+
+        <section className="app-panel p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">{t('systemSettingsPage.ldapSettings')}</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                {t('systemSettingsPage.ldapSettingsSubtitle')}
+              </p>
+            </div>
+          </div>
+
+          {ldapLoading ? (
+            <div className="mt-6 text-sm text-gray-500">{t('common.loading')}</div>
+          ) : (
+            <div className="mt-6 space-y-6">
+              <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200 bg-gray-50">
+                <div>
+                  <h3 className="font-medium text-gray-900">{t('systemSettingsPage.ldapEnable')}</h3>
+                  <p className="text-sm text-gray-500">{t('systemSettingsPage.ldapEnableDesc')}</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ldapConfig.enabled}
+                    onChange={(e) => handleLDAPChange('enabled', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              <div className={`space-y-4 ${ldapConfig.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapHost')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.host}
+                      onChange={(e) => handleLDAPChange('host', e.target.value)}
+                      placeholder="ldap.example.com"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapPort')}</label>
+                    <input
+                      type="number"
+                      value={ldapConfig.port}
+                      onChange={(e) => handleLDAPChange('port', parseInt(e.target.value) || 389)}
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200">
+                  <div>
+                    <h3 className="font-medium text-gray-900">{t('systemSettingsPage.ldapUseSSL')}</h3>
+                    <p className="text-sm text-gray-500">{t('systemSettingsPage.ldapUseSSLDesc')}</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ldapConfig.use_ssl}
+                      onChange={(e) => handleLDAPChange('use_ssl', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapBaseDN')}</label>
+                  <input
+                    type="text"
+                    value={ldapConfig.base_dn}
+                    onChange={(e) => handleLDAPChange('base_dn', e.target.value)}
+                    placeholder="dc=example,dc=com"
+                    className="app-input mt-1 block w-full"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapBindDN')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.bind_dn}
+                      onChange={(e) => handleLDAPChange('bind_dn', e.target.value)}
+                      placeholder="cn=admin,dc=example,dc=com"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapBindPassword')}</label>
+                    <input
+                      type="password"
+                      value={ldapConfig.bind_password}
+                      onChange={(e) => handleLDAPChange('bind_password', e.target.value)}
+                      placeholder="Enter password"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapUserSearchBaseDN')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.user_search_base_dn}
+                      onChange={(e) => handleLDAPChange('user_search_base_dn', e.target.value)}
+                      placeholder="ou=users,dc=example,dc=com"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapUserSearchFilter')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.user_search_filter}
+                      onChange={(e) => handleLDAPChange('user_search_filter', e.target.value)}
+                      placeholder="(uid=%{username})"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapUsernameAttribute')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.username_attribute}
+                      onChange={(e) => handleLDAPChange('username_attribute', e.target.value)}
+                      placeholder="uid"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapEmailAttribute')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.email_attribute}
+                      onChange={(e) => handleLDAPChange('email_attribute', e.target.value)}
+                      placeholder="mail"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapNameAttribute')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.name_attribute}
+                      onChange={(e) => handleLDAPChange('name_attribute', e.target.value)}
+                      placeholder="cn"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapAdditionalFilter')}</label>
+                  <input
+                    type="text"
+                    value={ldapConfig.ldap_filter}
+                    onChange={(e) => handleLDAPChange('ldap_filter', e.target.value)}
+                    placeholder="(memberOf=cn=users,ou=groups,dc=example,dc=com)"
+                    className="app-input mt-1 block w-full"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapGroupBaseDN')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.group_base_dn}
+                      onChange={(e) => handleLDAPChange('group_base_dn', e.target.value)}
+                      placeholder="ou=groups,dc=example,dc=com"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.ldapAdminGroup')}</label>
+                    <input
+                      type="text"
+                      value={ldapConfig.admin_group}
+                      onChange={(e) => handleLDAPChange('admin_group', e.target.value)}
+                      placeholder="clawreef-admins"
+                      className="app-input mt-1 block w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200">
+                  <div>
+                    <h3 className="font-medium text-gray-900">{t('systemSettingsPage.ldapAutoCreateUser')}</h3>
+                    <p className="text-sm text-gray-500">{t('systemSettingsPage.ldapAutoCreateUserDesc')}</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ldapConfig.auto_create_user}
+                      onChange={(e) => handleLDAPChange('auto_create_user', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200">
+                <div>
+                  <h3 className="font-medium text-gray-900">{t('systemSettingsPage.ldapAllowUsernameOrEmail')}</h3>
+                  <p className="text-sm text-gray-500">{t('systemSettingsPage.ldapAllowUsernameOrEmailDesc')}</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ldapConfig.allow_username_or_email_login}
+                    onChange={(e) => handleLDAPChange('allow_username_or_email_login', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {ldapError && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {ldapError}
+                </div>
+              )}
+
+              {ldapSaved && (
+                <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                  {t('systemSettingsPage.ldapSavedSuccess')}
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={saveLDAPConfig}
+                  disabled={ldapSaving}
+                  className="app-button-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {ldapSaving ? t('systemSettingsPage.ldapSaving') : t('systemSettingsPage.ldapSaveSettings')}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
         <section className="app-panel p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>

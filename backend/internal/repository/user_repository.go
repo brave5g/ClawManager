@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"clawreef/internal/models"
+
 	"github.com/upper/db/v4"
 )
 
@@ -16,7 +17,11 @@ type UserRepository interface {
 	Update(user *models.User) error
 	Delete(id int) error
 	List(offset, limit int) ([]models.User, error)
+	ListByApprovalStatus(status string, offset, limit int) ([]models.User, error)
 	Count() (int, error)
+	CountByApprovalStatus(status string) (int, error)
+	ListByPendingOrRejectedStatus(offset, limit int) ([]models.User, error)
+	CountByPendingOrRejectedStatus() (int, error)
 }
 
 // userRepository implements UserRepository
@@ -112,6 +117,44 @@ func (r *userRepository) Count() (int, error) {
 	count, err := r.sess.Collection("users").Find().Count()
 	if err != nil {
 		return 0, fmt.Errorf("failed to count users: %w", err)
+	}
+	return int(count), nil
+}
+
+// ListByApprovalStatus returns a list of users with a specific approval status
+func (r *userRepository) ListByApprovalStatus(status string, offset, limit int) ([]models.User, error) {
+	var users []models.User
+	err := r.sess.Collection("users").Find(db.Cond{"approval_status": status}).Offset(offset).Limit(limit).All(&users)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list users by approval status: %w", err)
+	}
+	return users, nil
+}
+
+// CountByApprovalStatus returns the number of users with a specific approval status
+func (r *userRepository) CountByApprovalStatus(status string) (int, error) {
+	count, err := r.sess.Collection("users").Find(db.Cond{"approval_status": status}).Count()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count users by approval status: %w", err)
+	}
+	return int(count), nil
+}
+
+// ListByPendingOrRejectedStatus returns a list of users with pending or rejected approval status
+func (r *userRepository) ListByPendingOrRejectedStatus(offset, limit int) ([]models.User, error) {
+	var users []models.User
+	err := r.sess.Collection("users").Find(db.Or(db.Cond{"approval_status": "pending"}, db.Cond{"approval_status": "rejected"})).Offset(offset).Limit(limit).All(&users)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending or rejected users: %w", err)
+	}
+	return users, nil
+}
+
+// CountByPendingOrRejectedStatus returns the number of users with pending or rejected approval status
+func (r *userRepository) CountByPendingOrRejectedStatus() (int, error) {
+	count, err := r.sess.Collection("users").Find(db.Or(db.Cond{"approval_status": "pending"}, db.Cond{"approval_status": "rejected"})).Count()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count pending or rejected users: %w", err)
 	}
 	return int(count), nil
 }

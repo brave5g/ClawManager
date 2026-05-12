@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"clawreef/internal/config"
@@ -11,39 +12,65 @@ import (
 	"clawreef/internal/utils"
 )
 
-// AuthService defines the interface for authentication operations
+type TokenPair struct {
+	AccessToken  string       `json:"access_token"`
+	RefreshToken string       `json:"refresh_token"`
+	User         *models.User `json:"user"`
+}
+
 type AuthService interface {
 	Register(username, email, password string) (*models.User, error)
 	Login(username, password string) (*TokenPair, error)
+	ProviderLogin(provider string, credentials map[string]string) (*TokenPair, error)
 	RefreshToken(refreshToken string) (*TokenPair, error)
 	GetCurrentUser(userID int) (*models.User, error)
 	ChangePassword(userID int, currentPassword, newPassword string) error
+	Logout(token string) error
 }
 
-// TokenPair holds access and refresh tokens
-type TokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-}
-
-// authService implements AuthService
 type authService struct {
-	userRepo  repository.UserRepository
-	jwtConfig config.JWTConfig
+	userRepo   repository.UserRepository
+	jwtConfig  config.JWTConfig
+	ldapConfig *config.LDAPConfig
 }
 
-// NewAuthService creates a new auth service
-func NewAuthService(userRepo repository.UserRepository, jwtConfig config.JWTConfig) AuthService {
+type authServiceWithProviders struct {
+	authService
+	providers       map[string]IdentityProvider
+	userSyncService UserSyncService
+}
+
+func NewAuthService(userRepo repository.UserRepository, jwtConfig config.JWTConfig, ldapConfig *config.LDAPConfig) AuthService {
 	return &authService{
-		userRepo:  userRepo,
-		jwtConfig: jwtConfig,
+		userRepo:   userRepo,
+		jwtConfig:  jwtConfig,
+		ldapConfig: ldapConfig,
 	}
 }
 
-// Register registers a new user
+func NewAuthServiceWithProviders(
+	userRepo repository.UserRepository,
+	jwtConfig config.JWTConfig,
+	ldapConfig *config.LDAPConfig,
+	userSyncService UserSyncService,
+	providers ...IdentityProvider,
+) AuthService {
+	providerMap := make(map[string]IdentityProvider)
+	for _, p := range providers {
+		providerMap[p.ProviderName()] = p
+	}
+	return &authServiceWithProviders{
+		authService: authService{
+			userRepo:   userRepo,
+			jwtConfig:  jwtConfig,
+			ldapConfig: ldapConfig,
+		},
+		providers:       providerMap,
+		userSyncService: userSyncService,
+	}
+}
+
 func (s *authService) Register(username, email, password string) (*models.User, error) {
-	// Check if username already exists
 	existingUser, err := s.userRepo.GetByUsername(username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check username: %w", err)
@@ -52,7 +79,6 @@ func (s *authService) Register(username, email, password string) (*models.User, 
 		return nil, errors.New("username already exists")
 	}
 
-	// Check if email already exists
 	existingUser, err = s.userRepo.GetByEmail(email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check email: %w", err)
@@ -61,19 +87,18 @@ func (s *authService) Register(username, email, password string) (*models.User, 
 		return nil, errors.New("email already exists")
 	}
 
-	// Hash password
 	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	// Create user
 	user := &models.User{
 		Username:     username,
 		Email:        email,
 		PasswordHash: passwordHash,
 		Role:         "user",
 		IsActive:     true,
+		Source:       "local",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -85,35 +110,81 @@ func (s *authService) Register(username, email, password string) (*models.User, 
 	return user, nil
 }
 
-// Login authenticates a user and returns tokens
 func (s *authService) Login(username, password string) (*TokenPair, error) {
-	// Get user by username
 	user, err := s.userRepo.GetByUsername(username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
+
+	if user == nil {
+		user, err = s.userRepo.GetByEmail(username)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get user: %w", err)
+		}
+	}
+
 	if user == nil {
 		return nil, errors.New("invalid username or password")
 	}
 
-	// Check if user is active
 	if !user.IsActive {
 		return nil, errors.New("account is disabled")
 	}
 
-	// Verify password
+	if user.Source != "" && user.Source != "local" {
+		return nil, fmt.Errorf("please use %s authentication to login", user.Source)
+	}
+
 	if !utils.VerifyPassword(password, user.PasswordHash) {
 		return nil, errors.New("invalid username or password")
 	}
 
-	// Update last login
+	return s.generateTokens(user.ID)
+}
+
+func (s *authService) ProviderLogin(provider string, credentials map[string]string) (*TokenPair, error) {
+	log.Printf("Provider authentication attempted but not enabled: %s", provider)
+	return nil, fmt.Errorf("provider authentication is not enabled")
+}
+
+func (s *authServiceWithProviders) ProviderLogin(provider string, credentials map[string]string) (*TokenPair, error) {
+	providerService, ok := s.providers[provider]
+	if !ok {
+		return nil, fmt.Errorf("provider '%s' is not configured", provider)
+	}
+
+	if !providerService.IsEnabled() {
+		return nil, fmt.Errorf("provider '%s' is not enabled", provider)
+	}
+
+	externalUser, err := providerService.Authenticate(credentials)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := s.userSyncService.SyncUser(provider, externalUser)
+	if err != nil {
+		return nil, err
+	}
+
+	if !user.IsActive {
+		return nil, errors.New("account is disabled")
+	}
+
+	if user.ApprovalStatus == models.UserStatusPending {
+		return nil, errors.New("PENDING_APPROVAL:account is pending approval. please wait for administrator to approve your account")
+	}
+
+	if user.ApprovalStatus == models.UserStatusRejected {
+		return nil, errors.New("account has been rejected. please contact administrator")
+	}
+
 	now := time.Now()
 	user.LastLogin = &now
 	if err := s.userRepo.Update(user); err != nil {
-		return nil, fmt.Errorf("failed to update last login: %w", err)
+		return nil, fmt.Errorf("failed to update last login time: %w", err)
 	}
 
-	// Generate tokens
 	tokenPair, err := s.generateTokens(user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
@@ -122,20 +193,16 @@ func (s *authService) Login(username, password string) (*TokenPair, error) {
 	return tokenPair, nil
 }
 
-// RefreshToken refreshes the access token using a refresh token
 func (s *authService) RefreshToken(refreshToken string) (*TokenPair, error) {
-	// Validate refresh token
 	claims, err := utils.ValidateToken(refreshToken, s.jwtConfig.Secret)
 	if err != nil {
 		return nil, errors.New("invalid refresh token")
 	}
 
-	// Check token type
 	if claims.TokenType != "refresh" {
 		return nil, errors.New("invalid token type")
 	}
 
-	// Get user
 	user, err := s.userRepo.GetByID(claims.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
@@ -144,21 +211,13 @@ func (s *authService) RefreshToken(refreshToken string) (*TokenPair, error) {
 		return nil, errors.New("user not found")
 	}
 
-	// Check if user is active
 	if !user.IsActive {
 		return nil, errors.New("account is disabled")
 	}
 
-	// Generate new tokens
-	tokenPair, err := s.generateTokens(user.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate tokens: %w", err)
-	}
-
-	return tokenPair, nil
+	return s.generateTokens(user.ID)
 }
 
-// GetCurrentUser gets the current user by ID
 func (s *authService) GetCurrentUser(userID int) (*models.User, error) {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
@@ -170,7 +229,6 @@ func (s *authService) GetCurrentUser(userID int) (*models.User, error) {
 	return user, nil
 }
 
-// ChangePassword updates the current user's password
 func (s *authService) ChangePassword(userID int, currentPassword, newPassword string) error {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
@@ -191,7 +249,6 @@ func (s *authService) ChangePassword(userID int, currentPassword, newPassword st
 
 	user.PasswordHash = passwordHash
 	user.UpdatedAt = time.Now()
-
 	if err := s.userRepo.Update(user); err != nil {
 		return fmt.Errorf("failed to update password: %w", err)
 	}
@@ -199,29 +256,46 @@ func (s *authService) ChangePassword(userID int, currentPassword, newPassword st
 	return nil
 }
 
-// generateTokens generates access and refresh tokens
+func (s *authService) Logout(token string) error {
+	return nil
+}
+
 func (s *authService) generateTokens(userID int) (*TokenPair, error) {
-	// Generate access token
-	accessToken, err := utils.GenerateToken(utils.TokenClaims{
-		UserID:    userID,
-		TokenType: "access",
-	}, s.jwtConfig.Secret, time.Duration(s.jwtConfig.AccessExpiry)*time.Minute)
+	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return nil, errors.New("user not found")
 	}
 
-	// Generate refresh token
-	refreshToken, err := utils.GenerateToken(utils.TokenClaims{
-		UserID:    userID,
-		TokenType: "refresh",
-	}, s.jwtConfig.Secret, time.Duration(s.jwtConfig.RefreshExpiry)*time.Hour)
+	accessToken, err := utils.GenerateToken(
+		utils.TokenClaims{
+			UserID:    userID,
+			TokenType: "access",
+		},
+		s.jwtConfig.Secret,
+		time.Duration(s.jwtConfig.AccessExpiry)*time.Minute,
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to generate access token: %w", err)
+	}
+
+	refreshToken, err := utils.GenerateToken(
+		utils.TokenClaims{
+			UserID:    userID,
+			TokenType: "refresh",
+		},
+		s.jwtConfig.Secret,
+		time.Duration(s.jwtConfig.RefreshExpiry)*time.Minute,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
 
 	return &TokenPair{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		ExpiresIn:    s.jwtConfig.AccessExpiry * 60,
+		User:         user,
 	}, nil
 }

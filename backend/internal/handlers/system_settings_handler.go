@@ -14,6 +14,7 @@ import (
 
 type SystemSettingsHandler struct {
 	systemImageSettingService services.SystemImageSettingService
+	systemConfigService       services.SystemConfigService
 }
 
 type UpsertSystemImageSettingRequest struct {
@@ -23,8 +24,32 @@ type UpsertSystemImageSettingRequest struct {
 	Image        string `json:"image" binding:"required"`
 }
 
-func NewSystemSettingsHandler(systemImageSettingService services.SystemImageSettingService) *SystemSettingsHandler {
-	return &SystemSettingsHandler{systemImageSettingService: systemImageSettingService}
+type LDAPConfigRequest struct {
+	Enabled                   bool   `json:"enabled"`
+	Host                      string `json:"host"`
+	Port                      int    `json:"port"`
+	UseSSL                    bool   `json:"use_ssl"`
+	InsecureSkipVerify        bool   `json:"insecure_skip_verify"`
+	BaseDN                    string `json:"base_dn"`
+	BindDN                    string `json:"bind_dn"`
+	BindPassword              string `json:"bind_password"`
+	UserSearchFilter          string `json:"user_search_filter"`
+	UserSearchBaseDN          string `json:"user_search_base_dn"`
+	UsernameAttribute         string `json:"username_attribute"`
+	EmailAttribute            string `json:"email_attribute"`
+	NameAttribute             string `json:"name_attribute"`
+	LDAPFilter                string `json:"ldap_filter"`
+	AllowUsernameOrEmailLogin bool   `json:"allow_username_or_email_login"`
+	AutoCreateUser            bool   `json:"auto_create_user"`
+	GroupBaseDN               string `json:"group_base_dn"`
+	AdminGroup                string `json:"admin_group"`
+}
+
+func NewSystemSettingsHandler(systemImageSettingService services.SystemImageSettingService, systemConfigService services.SystemConfigService) *SystemSettingsHandler {
+	return &SystemSettingsHandler{
+		systemImageSettingService: systemImageSettingService,
+		systemConfigService:       systemConfigService,
+	}
 }
 
 func (h *SystemSettingsHandler) ListSystemImageSettings(c *gin.Context) {
@@ -77,4 +102,104 @@ func (h *SystemSettingsHandler) DeleteSystemImageSetting(c *gin.Context) {
 	}
 
 	utils.Success(c, http.StatusOK, "System image setting deleted successfully", nil)
+}
+
+func (h *SystemSettingsHandler) GetLDAPConfig(c *gin.Context) {
+	cfg, err := h.systemConfigService.GetLDAPConfig()
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	utils.Success(c, http.StatusOK, "LDAP config retrieved successfully", cfg)
+}
+
+func (h *SystemSettingsHandler) SaveLDAPConfig(c *gin.Context) {
+	var req LDAPConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+
+	ldapCfg := &models.LDAPConfig{
+		Enabled:                   req.Enabled,
+		Host:                      req.Host,
+		Port:                      req.Port,
+		UseSSL:                    req.UseSSL,
+		InsecureSkipVerify:        req.InsecureSkipVerify,
+		BaseDN:                    req.BaseDN,
+		BindDN:                    req.BindDN,
+		BindPassword:              req.BindPassword,
+		UserSearchFilter:          req.UserSearchFilter,
+		UserSearchBaseDN:          req.UserSearchBaseDN,
+		UsernameAttribute:         req.UsernameAttribute,
+		EmailAttribute:            req.EmailAttribute,
+		NameAttribute:             req.NameAttribute,
+		LDAPFilter:                req.LDAPFilter,
+		AllowUsernameOrEmailLogin: req.AllowUsernameOrEmailLogin,
+		AutoCreateUser:            req.AutoCreateUser,
+		GroupBaseDN:               req.GroupBaseDN,
+		AdminGroup:                req.AdminGroup,
+	}
+
+	if err := h.systemConfigService.SaveLDAPConfig(ldapCfg); err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	utils.Success(c, http.StatusOK, "LDAP config saved successfully", nil)
+}
+
+func (h *SystemSettingsHandler) TestLDAPConnection(c *gin.Context) {
+	var req LDAPConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+
+	ldapCfg := &models.LDAPConfig{
+		Enabled:                   req.Enabled,
+		Host:                      req.Host,
+		Port:                      req.Port,
+		UseSSL:                    req.UseSSL,
+		InsecureSkipVerify:        req.InsecureSkipVerify,
+		BaseDN:                    req.BaseDN,
+		BindDN:                    req.BindDN,
+		BindPassword:              req.BindPassword,
+		UserSearchFilter:          req.UserSearchFilter,
+		UserSearchBaseDN:          req.UserSearchBaseDN,
+		UsernameAttribute:         req.UsernameAttribute,
+		EmailAttribute:            req.EmailAttribute,
+		NameAttribute:             req.NameAttribute,
+		LDAPFilter:                req.LDAPFilter,
+		AllowUsernameOrEmailLogin: req.AllowUsernameOrEmailLogin,
+		AutoCreateUser:            req.AutoCreateUser,
+		GroupBaseDN:               req.GroupBaseDN,
+		AdminGroup:                req.AdminGroup,
+	}
+
+	_, err := h.systemConfigService.TestLDAPConnection(ldapCfg)
+	if err != nil {
+		utils.Success(c, http.StatusOK, "LDAP connection test failed", gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	utils.Success(c, http.StatusOK, "LDAP connection test successful", gin.H{
+		"success": true,
+	})
+}
+
+func (h *SystemSettingsHandler) GetAllConfigs(c *gin.Context) {
+	configs, err := h.systemConfigService.GetAllConfigs()
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+
+	utils.Success(c, http.StatusOK, "Configs retrieved successfully", gin.H{
+		"items": configs,
+	})
 }

@@ -94,4 +94,26 @@ export const userService = {
     const response = await api.put(`/users/${id}/quota`, data);
     return response.data.data;
   },
+
+  // Get pending users (admin only)
+  getPendingUsers: async (page = 1, limit = 20): Promise<{ users: User[]; total: number }> => {
+    const response = await api.get('/users/pending', {
+      params: { page, limit }
+    });
+    return response.data.data || { users: [], total: 0 };
+  },
+
+  // Get rejected users (admin only)
+  getRejectedUsers: async (page = 1, limit = 20): Promise<{ users: User[]; total: number }> => {
+    const response = await api.get('/users/rejected', {
+      params: { page, limit }
+    });
+    return response.data.data || { users: [], total: 0 };
+  },
+
+  // Approve or reject user (admin only)
+  approveUser: async (id: number, action: 'approve' | 'reject'): Promise<User> => {
+    const response = await api.put(`/users/${id}/approve`, { action });
+    return response.data.data;
+  },
 };

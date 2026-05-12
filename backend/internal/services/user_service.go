@@ -16,11 +16,17 @@ type UserService interface {
 	GetUserByID(id int) (*models.User, error)
 	GetUserByUsername(username string) (*models.User, error)
 	ListUsers(offset, limit int) ([]models.User, error)
+	ListUsersByApprovalStatus(status string, offset, limit int) ([]models.User, error)
 	CountUsers() (int, error)
+	CountUsersByApprovalStatus(status string) (int, error)
 	UpdateUser(user *models.User) error
 	DeleteUser(id int) error
 	UpdateUserRole(id int, role string) error
 	CreateDefaultQuota(userID int) error
+	ListUsersByPendingOrRejectedStatus(offset, limit int) ([]models.User, error)
+	CountUsersByPendingOrRejectedStatus() (int, error)
+	ListRejectedUsers(offset, limit int) ([]models.User, error)
+	CountRejectedUsers() (int, error)
 }
 
 func defaultPasswordForRole(role string) string {
@@ -136,6 +142,42 @@ func (s *userService) CountUsers() (int, error) {
 	return count, nil
 }
 
+// ListUsersByApprovalStatus lists users by approval status with pagination
+func (s *userService) ListUsersByApprovalStatus(status string, offset, limit int) ([]models.User, error) {
+	users, err := s.userRepo.ListByApprovalStatus(status, offset, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list users by approval status: %w", err)
+	}
+	return users, nil
+}
+
+// CountUsersByApprovalStatus counts users by approval status
+func (s *userService) CountUsersByApprovalStatus(status string) (int, error) {
+	count, err := s.userRepo.CountByApprovalStatus(status)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count users by approval status: %w", err)
+	}
+	return count, nil
+}
+
+// ListUsersByPendingOrRejectedStatus lists users with pending or rejected approval status
+func (s *userService) ListUsersByPendingOrRejectedStatus(offset, limit int) ([]models.User, error) {
+	users, err := s.userRepo.ListByPendingOrRejectedStatus(offset, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list users by pending or rejected status: %w", err)
+	}
+	return users, nil
+}
+
+// CountUsersByPendingOrRejectedStatus counts users with pending or rejected approval status
+func (s *userService) CountUsersByPendingOrRejectedStatus() (int, error) {
+	count, err := s.userRepo.CountByPendingOrRejectedStatus()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count users by pending or rejected status: %w", err)
+	}
+	return count, nil
+}
+
 // UpdateUser updates a user
 func (s *userService) UpdateUser(user *models.User) error {
 	existingUser, err := s.userRepo.GetByID(user.ID)
@@ -152,6 +194,11 @@ func (s *userService) UpdateUser(user *models.User) error {
 	}
 	existingUser.IsActive = user.IsActive
 	existingUser.UpdatedAt = time.Now()
+
+	// Update approval status if provided (for LDAP user approval workflow)
+	if user.ApprovalStatus != "" {
+		existingUser.ApprovalStatus = user.ApprovalStatus
+	}
 
 	if err := s.userRepo.Update(existingUser); err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
@@ -207,4 +254,22 @@ func (s *userService) UpdateUserRole(id int, role string) error {
 func (s *userService) CreateDefaultQuota(userID int) error {
 	_, err := s.quotaRepo.CreateDefaultQuota(userID)
 	return err
+}
+
+// ListRejectedUsers lists users with rejected approval status
+func (s *userService) ListRejectedUsers(offset, limit int) ([]models.User, error) {
+	users, err := s.userRepo.ListByApprovalStatus("rejected", offset, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list rejected users: %w", err)
+	}
+	return users, nil
+}
+
+// CountRejectedUsers counts users with rejected approval status
+func (s *userService) CountRejectedUsers() (int, error) {
+	count, err := s.userRepo.CountByApprovalStatus("rejected")
+	if err != nil {
+		return 0, fmt.Errorf("failed to count rejected users: %w", err)
+	}
+	return count, nil
 }

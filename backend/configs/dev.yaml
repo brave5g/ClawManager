@@ -13,3 +13,22 @@ jwt:
   secret: "clawreef-dev-secret-key-change-in-production"
   access_expiry: 60
   refresh_expiry: 168
+
+ldap:
+  enabled: true
+  host: "localhost"
+  port: 389
+  useSSL: false
+  baseDN: "dc=clawreef,dc=local"
+  bindDN: "cn=admin,dc=clawreef,dc=local"
+  bindPassword: "admin123"
+  userSearchFilter: "(uid=%{username})"
+  userSearchBaseDN: "ou=users,dc=clawreef,dc=local"
+  usernameAttribute: "uid"
+  emailAttribute: "mail"
+  nameAttribute: "cn"
+  ldapFilter: ""
+  allowUsernameOrEmailLogin: true
+  autoCreateUser: true
+  groupBaseDN: "ou=groups,dc=clawreef,dc=local"
+  adminGroup: "clawreef-admins"

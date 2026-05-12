@@ -17,25 +17,29 @@ import (
 	"clawreef/internal/repository"
 	"clawreef/internal/services"
 	"clawreef/internal/services/k8s"
+	"clawreef/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Initialize database
+	if err := utils.InitEncryption(); err != nil {
+		log.Fatalf("Failed to initialize encryption: %v", err)
+	}
+
+	config.DecryptLDAPBindPassword(cfg)
+
 	database, err := db.Initialize(cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer db.Close()
 
-	// Initialize Kubernetes client
 	log.Printf("K8s StorageClass config: %s", cfg.GetStorageClass())
 	if err := k8s.Initialize(cfg); err != nil {
 		log.Printf("Warning: Failed to initialize Kubernetes client: %v", err)
@@ -46,7 +50,6 @@ func main() {
 			client.GetConnectionMode(), client.StorageClass)
 	}
 
-	// Initialize repositories
 	userRepo := repository.NewUserRepository(database)
 	quotaRepo := repository.NewQuotaRepository(database)
 	instanceRepo := repository.NewInstanceRepository(database)
@@ -67,6 +70,8 @@ func main() {
 	instanceConfigRevisionRepo := repository.NewInstanceConfigRevisionRepository(database)
 	skillRepo := repository.NewSkillRepository(database)
 	securityScanRepo := repository.NewSecurityScanRepository(database)
+	systemConfigRepo := repository.NewSystemConfigRepository(database)
+	systemConfigService := services.NewSystemConfigService(systemConfigRepo, &cfg.LDAP)
 
 	if repaired, repairErr := services.RepairSeededAdminPassword(userRepo); repairErr != nil {
 		log.Printf("Warning: failed to repair seeded admin password: %v", repairErr)
@@ -74,8 +79,18 @@ func main() {
 		log.Printf("Repaired seeded admin password hash for default admin account")
 	}
 
-	// Initialize services
-	authService := services.NewAuthService(userRepo, cfg.JWT)
+	var authService services.AuthService
+	autoCreateChecker := func(providerName string) bool {
+		if providerName == "ldap" {
+			return cfg.LDAP.AutoCreateUser
+		}
+		return true
+	}
+	userSyncService := services.NewUserSyncService(userRepo, quotaRepo, autoCreateChecker)
+	ldapProvider := services.NewLDAPService(&cfg.LDAP)
+	authService = services.NewAuthServiceWithProviders(userRepo, cfg.JWT, &cfg.LDAP, userSyncService, ldapProvider)
+	log.Printf("Provider-based authentication support loaded")
+
 	quotaService := services.NewQuotaService(quotaRepo)
 	userService := services.NewUserService(userRepo, quotaRepo)
 	systemImageSettingService := services.NewSystemImageSettingService(systemImageSettingRepo)
@@ -91,7 +106,7 @@ func main() {
 	openClawConfigService := services.NewOpenClawConfigService(openClawConfigRepo)
 	objectStorageService, err := services.NewObjectStorageService(cfg.ObjectStorage)
 	if err != nil {
-		log.Fatalf("Failed to initialize object storage: %v", err)
+		log.Fatalf("Failed to initialize object storage: %w", err)
 	}
 	skillScannerClient := services.NewSkillScannerClient(cfg.SkillScanner)
 	aiObservabilityService := services.NewAIObservabilityService(modelInvocationRepo, auditEventRepo, costRecordRepo, riskHitRepo, chatMessageRepo, llmModelRepo, instanceRepo, userRepo)
@@ -112,11 +127,10 @@ func main() {
 	securityScanService := services.NewSecurityScanService(securityScanRepo, skillRepo, objectStorageService, skillScannerClient)
 	aiGatewayService := aigateway.NewService(llmModelRepo, modelInvocationService, auditEventService, costRecordService, riskDetectionService, riskHitService, chatSessionService, chatMessageService)
 
-	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(authService)
+	authHandler := handlers.NewAuthHandler(authService, systemConfigService)
 	userHandler := handlers.NewUserHandler(userService, quotaService)
 	instanceHandler := handlers.NewInstanceHandler(instanceService, instanceAgentService, instanceRuntimeStatusService, instanceCommandService, instanceConfigRevisionService, openClawConfigService, skillService)
-	systemSettingsHandler := handlers.NewSystemSettingsHandler(systemImageSettingService)
+	systemSettingsHandler := handlers.NewSystemSettingsHandler(systemImageSettingService, systemConfigService)
 	llmModelHandler := handlers.NewLLMModelHandler(llmModelService)
 	aiGatewayHandler := handlers.NewAIGatewayHandler(aiGatewayService)
 	aiObservabilityHandler := handlers.NewAIObservabilityHandler(aiObservabilityService)
@@ -128,43 +142,37 @@ func main() {
 	securityHandler := handlers.NewSecurityHandler(securityScanService)
 	agentHandler := handlers.NewAgentHandler(instanceAgentService, instanceCommandService, instanceRuntimeStatusService, instanceConfigRevisionService, skillService)
 
-	// Initialize WebSocket hub and handler
 	wsHub := services.GetHub()
 	wsHandler := handlers.NewWebSocketHandler(wsHub)
 
-	// Start sync service to keep instance status in sync with K8s
 	syncService := services.NewSyncService(instanceRepo, instanceRuntimeStatusService)
 	syncService.Start()
 
-	// Setup router
 	r := gin.Default()
 
-	// Middleware
 	r.Use(middleware.CORS())
 	r.Use(middleware.ErrorHandler())
 	r.NoRoute(egressProxyHandler.Handle)
 	r.NoMethod(egressProxyHandler.Handle)
 
-	// Routes
 	api := r.Group("/api/v1")
 	{
-		// Auth routes
 		auth := api.Group("/auth")
 		{
+			auth.GET("/config", authHandler.GetLoginConfig)
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
+			auth.POST("/login/ldap", authHandler.LDAPLogin)
 			auth.POST("/refresh", authHandler.RefreshToken)
 			auth.POST("/logout", authHandler.Logout)
 			auth.GET("/me", middleware.Auth(), middleware.SetUserInfo(userRepo), authHandler.GetCurrentUser)
 			auth.POST("/change-password", middleware.Auth(), authHandler.ChangePassword)
 		}
 
-		// User routes (authenticated)
 		users := api.Group("/users")
 		users.Use(middleware.Auth())
 		users.Use(middleware.SetUserInfo(userRepo))
 		{
-			// Admin only routes
 			adminOnly := users.Group("")
 			adminOnly.Use(middleware.NewAdminAuth(userRepo))
 			{
@@ -174,15 +182,26 @@ func main() {
 				adminOnly.DELETE("/:id", userHandler.DeleteUser)
 				adminOnly.PUT("/:id/role", userHandler.UpdateRole)
 				adminOnly.PUT("/:id/quota", userHandler.UpdateUserQuota)
+				adminOnly.PUT("/:id/approve", userHandler.ApproveUser)
 			}
 
-			// User or admin routes
 			users.GET("/:id", userHandler.GetUser)
 			users.PUT("/:id", userHandler.UpdateUser)
 			users.GET("/:id/quota", userHandler.GetUserQuota)
 		}
 
-		// Instance routes (authenticated)
+		api.GET("/users/pending",
+			middleware.Auth(),
+			middleware.SetUserInfo(userRepo),
+			middleware.NewAdminAuth(userRepo),
+			userHandler.ListPendingUsers)
+
+		api.GET("/users/rejected",
+			middleware.Auth(),
+			middleware.SetUserInfo(userRepo),
+			middleware.NewAdminAuth(userRepo),
+			userHandler.ListRejectedUsers)
+
 		instances := api.Group("/instances")
 		instances.Use(middleware.Auth())
 		instances.Use(middleware.SetUserInfo(userRepo))
@@ -212,10 +231,6 @@ func main() {
 			instances.DELETE("/:id/skills/:skillId", skillHandler.RemoveSkillFromInstance)
 		}
 
-		// Admin console: cross-user instance listing. Gated by admin
-		// middleware — non-admin callers get 403. The workspace
-		// /instances endpoint above stays caller-scoped regardless of
-		// role; admin status only unlocks this dedicated surface.
 		adminInstances := api.Group("/admin/instances")
 		adminInstances.Use(middleware.Auth())
 		adminInstances.Use(middleware.SetUserInfo(userRepo))
@@ -269,7 +284,7 @@ func main() {
 			systemSettings.GET("/images", systemSettingsHandler.ListSystemImageSettings)
 		}
 
-		adminSystemSettings := api.Group("/system-settings")
+		adminSystemSettings := api.Group("/admin/system-settings")
 		adminSystemSettings.Use(middleware.Auth())
 		adminSystemSettings.Use(middleware.SetUserInfo(userRepo))
 		adminSystemSettings.Use(middleware.NewAdminAuth(userRepo))
@@ -277,6 +292,10 @@ func main() {
 			adminSystemSettings.PUT("/images", systemSettingsHandler.UpsertSystemImageSetting)
 			adminSystemSettings.DELETE("/images/:instanceType", systemSettingsHandler.DeleteSystemImageSetting)
 			adminSystemSettings.GET("/cluster-resources", clusterResourceHandler.GetOverview)
+			adminSystemSettings.GET("/ldap", systemSettingsHandler.GetLDAPConfig)
+			adminSystemSettings.PUT("/ldap", systemSettingsHandler.SaveLDAPConfig)
+			adminSystemSettings.POST("/ldap/test", systemSettingsHandler.TestLDAPConnection)
+			adminSystemSettings.GET("/configs", systemSettingsHandler.GetAllConfigs)
 		}
 
 		adminModels := api.Group("/admin/models")
@@ -361,12 +380,9 @@ func main() {
 			agent.GET("/config/revisions/:id", agentHandler.GetConfigRevision)
 		}
 
-		// Instance proxy routes (token-based auth, no session required)
-		// These routes proxy requests to the actual instance pods
 		api.Any("/instances/:id/proxy", instanceHandler.ProxyInstance)
 		api.Any("/instances/:id/proxy/*path", instanceHandler.ProxyInstance)
 
-		// WebSocket routes
 		ws := api.Group("/ws")
 		ws.Use(middleware.Auth())
 		ws.Use(middleware.SetUserInfo(userRepo))
@@ -376,7 +392,6 @@ func main() {
 		}
 	}
 
-	// Start server with graceful shutdown
 	srv := &http.Server{
 		Addr:    cfg.Server.Address,
 		Handler: r,
@@ -389,13 +404,11 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	log.Printf("Received signal %v, shutting down gracefully...", sig)
 
-	// Give active requests up to 10 seconds to finish
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -403,7 +416,6 @@ func main() {
 		log.Printf("HTTP server forced to shutdown: %v", err)
 	}
 
-	// Stop background services
 	syncService.Stop()
 	wsHub.Stop()
 	instanceHandler.Shutdown()
