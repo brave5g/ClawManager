@@ -1,15 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import AdminLayout from '../../components/AdminLayout';
 import { useI18n } from '../../contexts/I18nContext';
 import { userService } from '../../services/userService';
 import type { CreateUserRequest, ImportUsersResponse } from '../../services/userService';
 import type { User, UserQuota } from '../../types/user';
 
+const USERS_PAGE_SIZE = 20;
+
 const UserManagementPage: React.FC = () => {
   const { t } = useI18n();
   const [users, setUsers] = useState<User[]>([]);
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
   const [rejectedUsers, setRejectedUsers] = useState<User[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalUsers, setTotalUsers] = useState(0);
   const [loading, setLoading] = useState(true);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [rejectedLoading, setRejectedLoading] = useState(false);
@@ -34,9 +38,36 @@ const UserManagementPage: React.FC = () => {
     role: 'user',
   });
 
+  const loadUsers = useCallback(async (targetPage: number) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await userService.getUsers(targetPage, USERS_PAGE_SIZE);
+      const total = data.total || 0;
+      const maxPage = Math.max(1, Math.ceil(total / USERS_PAGE_SIZE));
+
+      if (targetPage > maxPage) {
+        setUsers([]);
+        setTotalUsers(total);
+        setPage(maxPage);
+        return;
+      }
+
+      setUsers(data.users || []);
+      setTotalUsers(total);
+      setPage(data.page || targetPage);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.loadFailed')));
+      setUsers([]);
+      setTotalUsers(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
   useEffect(() => {
-    void loadUsers();
-  }, []);
+    void loadUsers(page);
+  }, [loadUsers, page]);
 
   useEffect(() => {
     if (activeTab === 'pending') {
@@ -50,19 +81,9 @@ const UserManagementPage: React.FC = () => {
     }
   }, [activeTab]);
 
-  const loadUsers = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await userService.getUsers();
-      setUsers(data.users || []);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.loadFailed'));
-      setUsers([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const totalPages = Math.max(1, Math.ceil(totalUsers / USERS_PAGE_SIZE));
+  const showingFrom = totalUsers === 0 ? 0 : (page - 1) * USERS_PAGE_SIZE + 1;
+  const showingTo = Math.min(page * USERS_PAGE_SIZE, totalUsers);
 
   const loadPendingUsers = async () => {
     try {
@@ -96,7 +117,7 @@ const UserManagementPage: React.FC = () => {
     try {
       await userService.approveUser(user.id, 'approve');
       setPendingUsers((current) => current.filter((u) => u.id !== user.id));
-      void loadUsers();
+      void loadUsers(page);
     } catch (err: any) {
       setError(err.response?.data?.error || t('userManagementPage.approveFailed'));
     }
@@ -115,7 +136,7 @@ const UserManagementPage: React.FC = () => {
     try {
       await userService.approveUser(user.id, 'approve');
       setRejectedUsers((current) => current.filter((u) => u.id !== user.id));
-      void loadUsers();
+      void loadUsers(page);
     } catch (err: any) {
       setError(err.response?.data?.error || t('userManagementPage.approveFailed'));
     }
@@ -131,11 +152,13 @@ const UserManagementPage: React.FC = () => {
 
     try {
       await userService.deleteUser(userToDelete.id);
-      setUsers((current) => current.filter((user) => user.id !== userToDelete.id));
+      const nextTotal = Math.max(0, totalUsers - 1);
+      const nextPage = Math.min(page, Math.max(1, Math.ceil(nextTotal / USERS_PAGE_SIZE)));
       setShowDeleteModal(false);
       setUserToDelete(null);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.deleteFailed'));
+      await loadUsers(nextPage);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.deleteFailed')));
     }
   };
 
@@ -150,8 +173,8 @@ const UserManagementPage: React.FC = () => {
       setQuota(userQuota);
       setSelectedUser(user);
       setShowQuotaModal(true);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.loadQuotaFailed'));
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.loadQuotaFailed')));
     }
   };
 
@@ -169,8 +192,8 @@ const UserManagementPage: React.FC = () => {
       setShowQuotaModal(false);
       setSelectedUser(null);
       setQuota(null);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.updateQuotaFailed'));
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.updateQuotaFailed')));
     }
   };
 
@@ -189,19 +212,19 @@ const UserManagementPage: React.FC = () => {
       )));
       setShowRoleModal(false);
       setSelectedUser(null);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.updateRoleFailed'));
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.updateRoleFailed')));
     }
   };
 
   const handleAddUser = async () => {
     try {
-      const created = await userService.createUser(newUser);
-      setUsers((current) => [...current, created]);
+      await userService.createUser(newUser);
       setShowAddModal(false);
       setNewUser({ username: '', email: '', password: '', role: 'user' });
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.createFailed'));
+      await loadUsers(page);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.createFailed')));
     }
   };
 
@@ -218,9 +241,9 @@ const UserManagementPage: React.FC = () => {
       setImportResult(result);
       setShowImportModal(false);
       setImportFile(null);
-      await loadUsers();
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.importFailed'));
+      await loadUsers(1);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.importFailed')));
     } finally {
       setImporting(false);
     }
@@ -392,110 +415,151 @@ const UserManagementPage: React.FC = () => {
 
         {activeTab === 'all' ? (
           <div className="app-panel">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('auth.username')}
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('auth.email')}
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('admin.role')}
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('common.status')}
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('userManagementPage.source')}
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('common.createdAt')}
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    {t('aiAuditPage.action')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{user.username}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">{user.email}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        user.role === 'admin'
-                          ? 'bg-purple-100 text-purple-800'
-                          : 'bg-green-100 text-green-800'
-                      }`}>
-                        {user.role === 'admin' ? t('common.admin') : t('common.user')}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        user.source === 'ldap'
-                          ? user.approval_status === 'approved'
-                            ? 'bg-green-100 text-green-800'
-                            : user.approval_status === 'pending'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-red-100 text-red-800'
-                          : user.is_active
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-red-100 text-red-800'
-                      }`}>
-                        {user.source === 'ldap'
-                          ? user.approval_status === 'approved'
-                            ? t('userManagementPage.approved')
-                            : user.approval_status === 'pending'
-                              ? t('userManagementPage.pending')
-                              : t('userManagementPage.rejected')
-                          : user.is_active
-                            ? t('modelManagementPage.active')
-                            : t('modelManagementPage.inactive')
-                        }
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        user.source === 'ldap'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {user.source === 'ldap' ? 'LDAP' : t('userManagementPage.local')}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(user.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <button
-                        onClick={() => handleEditQuota(user)}
-                        className="text-indigo-600 hover:text-indigo-900 mr-4"
-                      >
-                        {t('userManagementPage.quota')}
-                      </button>
-                      <button
-                        onClick={() => handleEditRole(user)}
-                        className="text-indigo-600 hover:text-indigo-900 mr-4"
-                      >
+            {users.length === 0 ? (
+              <div className="px-6 py-12 text-center text-sm text-gray-500">
+                {t('userManagementPage.noUsers')}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {t('auth.username')}
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {t('auth.email')}
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         {t('admin.role')}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteClick(user)}
-                        className="text-red-600 hover:text-red-900"
-                      >
-                        {t('common.delete')}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {t('common.status')}
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {t('userManagementPage.source')}
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {t('common.createdAt')}
+                      </th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {t('aiAuditPage.action')}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {users.map((user) => (
+                      <tr key={user.id}>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">{user.username}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-500">{user.email}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            user.role === 'admin'
+                              ? 'bg-purple-100 text-purple-800'
+                              : 'bg-green-100 text-green-800'
+                          }`}>
+                            {user.role === 'admin' ? t('common.admin') : t('common.user')}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            user.source === 'ldap'
+                              ? user.approval_status === 'approved'
+                                ? 'bg-green-100 text-green-800'
+                                : user.approval_status === 'pending'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-red-100 text-red-800'
+                              : user.is_active
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                          }`}>
+                            {user.source === 'ldap'
+                              ? user.approval_status === 'approved'
+                                ? t('userManagementPage.approved')
+                                : user.approval_status === 'pending'
+                                  ? t('userManagementPage.pending')
+                                  : t('userManagementPage.rejected')
+                              : user.is_active
+                                ? t('modelManagementPage.active')
+                                : t('modelManagementPage.inactive')
+                            }
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            user.source === 'ldap'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {user.source === 'ldap' ? 'LDAP' : t('userManagementPage.local')}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(user.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <button
+                            onClick={() => handleEditQuota(user)}
+                            className="text-indigo-600 hover:text-indigo-900 mr-4"
+                          >
+                            {t('userManagementPage.quota')}
+                          </button>
+                          <button
+                            onClick={() => handleEditRole(user)}
+                            className="text-indigo-600 hover:text-indigo-900 mr-4"
+                          >
+                            {t('admin.role')}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteClick(user)}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            {t('common.delete')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {totalUsers > 0 && (
+              <div className="flex flex-col gap-3 border-t border-gray-200 px-6 py-4 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  {t('userManagementPage.showingUsers', {
+                    from: showingFrom,
+                    to: showingTo,
+                    total: totalUsers,
+                  })}
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    disabled={page <= 1}
+                    className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {t('admin.prev')}
+                  </button>
+                  <span>
+                    {t('admin.pageSummary', { page, total: totalPages })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                    disabled={page >= totalPages}
+                    className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {t('admin.nextPage')}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ) : activeTab === 'pending' ? (
           <div className="app-panel">
@@ -793,54 +857,122 @@ const UserManagementPage: React.FC = () => {
                   <option value="admin">{t('common.admin')}</option>
                 </select>
               </div>
-              <div className="rounded-md border border-[#eadfd8] bg-[#fff8f5] px-3 py-2 text-sm text-[#5f5957]">
-                {t('userManagementPage.initialPassword')}: <span className="font-medium">{newUser.role === 'admin' ? 'admin123' : 'user123'}</span>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  {t('auth.password')}
+                </label>
+                <input
+                  type="password"
+                  value={newUser.password}
+                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  placeholder={t('auth.passwordPlaceholder')}
+                />
               </div>
             </div>
             <div className="mt-4 flex justify-end space-x-2">
               <button
-                onClick={() => setShowAddModal(false)}
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400"
+                onClick={() => {
+                  setShowAddModal(false);
+                  setNewUser({ username: '', email: '', password: '', role: 'user' });
+                }}
+                className="rounded-md bg-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-400"
               >
                 {t('common.cancel')}
               </button>
               <button
                 onClick={handleAddUser}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                className="rounded-md bg-[#ef4444] px-4 py-2 text-white hover:bg-[#dc2626]"
               >
-                {t('common.create')}
+                {t('admin.addUser')}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {showQuotaModal && quota && (
+      {showQuotaModal && (
         <div
           className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full"
           onClick={(e) => handleModalBackgroundClick(e, () => setShowQuotaModal(false))}
         >
           <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
-              {t('userManagementPage.editQuotaFor', { username: selectedUser?.username || '' })}
+              {t('userManagementPage.editQuota', { username: selectedUser?.username })}
             </h3>
-            <div className="space-y-4">
-              <FieldNumber label={t('userManagementPage.maxInstances')} value={quota.max_instances} onChange={(value) => setQuota({ ...quota, max_instances: value })} />
-              <FieldNumber label={t('userManagementPage.maxCpuCores')} value={quota.max_cpu_cores} onChange={(value) => setQuota({ ...quota, max_cpu_cores: value })} />
-              <FieldNumber label={t('userManagementPage.maxMemoryGb')} value={quota.max_memory_gb} onChange={(value) => setQuota({ ...quota, max_memory_gb: value })} />
-              <FieldNumber label={t('userManagementPage.maxStorageGb')} value={quota.max_storage_gb} onChange={(value) => setQuota({ ...quota, max_storage_gb: value })} />
-              <FieldNumber label={t('userManagementPage.maxGpuCount')} value={quota.max_gpu_count} onChange={(value) => setQuota({ ...quota, max_gpu_count: value })} />
-            </div>
+            {quota && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    {t('userManagementPage.maxInstances')}
+                  </label>
+                  <input
+                    type="number"
+                    value={quota.max_instances}
+                    onChange={(e) => setQuota({ ...quota, max_instances: parseInt(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    {t('userManagementPage.maxCPU')}
+                  </label>
+                  <input
+                    type="number"
+                    value={quota.max_cpu_cores}
+                    onChange={(e) => setQuota({ ...quota, max_cpu_cores: parseInt(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    {t('userManagementPage.maxMemory')}
+                  </label>
+                  <input
+                    type="number"
+                    value={quota.max_memory_gb}
+                    onChange={(e) => setQuota({ ...quota, max_memory_gb: parseFloat(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    {t('userManagementPage.maxStorage')}
+                  </label>
+                  <input
+                    type="number"
+                    value={quota.max_storage_gb}
+                    onChange={(e) => setQuota({ ...quota, max_storage_gb: parseFloat(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    {t('userManagementPage.maxGPU')}
+                  </label>
+                  <input
+                    type="number"
+                    value={quota.max_gpu_count}
+                    onChange={(e) => setQuota({ ...quota, max_gpu_count: parseInt(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+              </div>
+            )}
             <div className="mt-4 flex justify-end space-x-2">
               <button
-                onClick={() => setShowQuotaModal(false)}
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400"
+                onClick={() => {
+                  setShowQuotaModal(false);
+                  setSelectedUser(null);
+                  setQuota(null);
+                }}
+                className="rounded-md bg-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-400"
               >
                 {t('common.cancel')}
               </button>
               <button
                 onClick={handleSaveQuota}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                className="rounded-md bg-[#ef4444] px-4 py-2 text-white hover:bg-[#dc2626]"
               >
                 {t('common.save')}
               </button>
@@ -854,66 +986,63 @@ const UserManagementPage: React.FC = () => {
           className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full"
           onClick={(e) => handleModalBackgroundClick(e, () => setShowRoleModal(false))}
         >
-          <div className="relative top-20 mx-auto p-5 border w-80 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
-              {t('userManagementPage.changeRoleFor', { username: selectedUser?.username || '' })}
+              {t('userManagementPage.editRole', { username: selectedUser?.username })}
             </h3>
-            <div className="space-y-2">
-              <button
-                onClick={() => handleSaveRole('user')}
-                className={`w-full px-4 py-2 rounded-md ${
-                  selectedUser?.role === 'user'
-                    ? 'bg-green-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
+            <div className="space-y-4">
+              <select
+                value={selectedUser?.role || 'user'}
+                onChange={(e) => handleSaveRole(e.target.value as 'admin' | 'user')}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
               >
-                {t('common.user')}
-              </button>
-              <button
-                onClick={() => handleSaveRole('admin')}
-                className={`w-full px-4 py-2 rounded-md ${
-                  selectedUser?.role === 'admin'
-                    ? 'bg-purple-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                {t('common.admin')}
-              </button>
+                <option value="user">{t('common.user')}</option>
+                <option value="admin">{t('common.admin')}</option>
+              </select>
             </div>
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end space-x-2">
               <button
-                onClick={() => setShowRoleModal(false)}
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400"
+                onClick={() => {
+                  setShowRoleModal(false);
+                  setSelectedUser(null);
+                }}
+                className="rounded-md bg-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-400"
               >
                 {t('common.cancel')}
+              </button>
+              <button
+                onClick={() => handleSaveRole(selectedUser?.role === 'admin' ? 'user' : 'admin')}
+                className="rounded-md bg-[#ef4444] px-4 py-2 text-white hover:bg-[#dc2626]"
+              >
+                {t('common.save')}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {showDeleteModal && userToDelete && (
+      {showDeleteModal && (
         <div
           className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full"
-          onClick={(e) => handleModalBackgroundClick(e, handleCancelDelete)}
+          onClick={(e) => handleModalBackgroundClick(e, () => handleCancelDelete())}
         >
           <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
-              {t('userManagementPage.confirmDeleteTitle')}
+              {t('userManagementPage.confirmDelete')}
             </h3>
-            <p className="text-gray-600 mb-4">
-              {t('userManagementPage.confirmDeleteMessage', { username: userToDelete.username })}
+            <p className="text-gray-500 mb-4">
+              {t('userManagementPage.deleteWarning', { username: userToDelete?.username })}
             </p>
-            <div className="mt-4 flex justify-end space-x-2">
+            <div className="flex justify-end space-x-2">
               <button
                 onClick={handleCancelDelete}
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400"
+                className="rounded-md bg-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-400"
               >
                 {t('common.cancel')}
               </button>
               <button
                 onClick={handleConfirmDelete}
-                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                className="rounded-md bg-red-500 px-4 py-2 text-white hover:bg-red-600"
               >
                 {t('common.delete')}
               </button>
@@ -925,26 +1054,14 @@ const UserManagementPage: React.FC = () => {
   );
 };
 
-function FieldNumber({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-700">{label}</label>
-      <input
-        type="number"
-        value={value}
-        onChange={(e) => onChange(parseInt(e.target.value, 10) || 0)}
-        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-      />
-    </div>
-  );
+function getRequestErrorMessage(err: unknown, defaultMessage: string): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    return String((err as Record<string, unknown>).message);
+  }
+  return defaultMessage;
 }
 
 export default UserManagementPage;
